@@ -21,6 +21,7 @@
 #include <asm/csr.h>
 
 extern u32 __user_rt_sigreturn[2];
+unsigned long __ro_after_init signal_minsigstksz;
 static size_t rvv_sc_size;
 
 #define DEBUG_SIG 0
@@ -474,4 +475,10 @@ asmlinkage __visible void do_notify_resume(struct pt_regs *regs,
 void __init init_rt_signal_env(void)
 {
 	rvv_sc_size = sizeof(struct __sc_riscv_v_state) + riscv_vsize;
+	/*
+	 * Determine the stack space required for guaranteed signal delivery.
+	 * The signal_minsigstksz will be populated into the AT_MINSIGSTKSZ entry
+	 * in the auxiliary array at process startup.
+	 */
+	signal_minsigstksz = cal_rt_frame_size();
 }
