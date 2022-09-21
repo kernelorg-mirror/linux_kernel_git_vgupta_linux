@@ -59,6 +59,16 @@ static inline void vstate_off(struct task_struct *task,
 	regs->status = (regs->status & ~SR_VS) | SR_VS_OFF;
 }
 
+static inline void vstate_on(struct task_struct *task, struct pt_regs *regs)
+{
+	regs->status = (regs->status & ~(SR_VS)) | SR_VS_INITIAL;
+}
+
+static inline bool vstate_query(struct pt_regs *regs)
+{
+	return (regs->status & SR_VS) != 0;
+}
+
 static inline void vstate_save(struct task_struct *task,
 			       struct pt_regs *regs)
 {
