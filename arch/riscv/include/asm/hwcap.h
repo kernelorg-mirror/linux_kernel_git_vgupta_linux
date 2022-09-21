@@ -65,6 +65,9 @@ enum riscv_isa_ext_id {
  * This enum represents the logical ID for each RISC-V ISA extension static
  * keys. We can use static key to optimize code path if some ISA extensions
  * are available.
+ * Note: There are some special cases such as Vector extension which don't
+ *       define their static key here, but seperately (cfr. vector.h) due to
+ *       parsing ambiguity (rv64 contains 'v' which doesn't imply Vector).
  */
 enum riscv_isa_ext_key {
 	RISCV_ISA_EXT_KEY_FPU,		/* For 'F' and 'D' */

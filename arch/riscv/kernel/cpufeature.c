@@ -20,6 +20,9 @@
 #include <asm/processor.h>
 #include <asm/smp.h>
 #include <asm/switch_to.h>
+#ifdef CONFIG_RISCV_ISA_V
+#include <asm/vector.h>
+#endif
 
 #define NUM_ALPHA_EXTS ('z' - 'a' + 1)
 
@@ -30,6 +33,10 @@ static DECLARE_BITMAP(riscv_isa, RISCV_ISA_EXT_MAX) __read_mostly;
 
 DEFINE_STATIC_KEY_ARRAY_FALSE(riscv_isa_ext_keys, RISCV_ISA_EXT_KEY_MAX);
 EXPORT_SYMBOL(riscv_isa_ext_keys);
+#ifdef CONFIG_RISCV_ISA_V
+__ro_after_init DEFINE_STATIC_KEY_FALSE(riscv_isa_ext_key_vector);
+EXPORT_SYMBOL_GPL(riscv_isa_ext_key_vector);
+#endif
 
 /**
  * riscv_isa_extension_base() - Get base extension word
@@ -83,6 +90,7 @@ void __init riscv_fill_hwcap(void)
 	isa2hwcap['f'] = isa2hwcap['F'] = COMPAT_HWCAP_ISA_F;
 	isa2hwcap['d'] = isa2hwcap['D'] = COMPAT_HWCAP_ISA_D;
 	isa2hwcap['c'] = isa2hwcap['C'] = COMPAT_HWCAP_ISA_C;
+	isa2hwcap['v'] = isa2hwcap['V'] = COMPAT_HWCAP_ISA_V;
 
 	elf_hwcap = 0;
 
@@ -248,6 +256,12 @@ void __init riscv_fill_hwcap(void)
 		if (j >= 0)
 			static_branch_enable(&riscv_isa_ext_keys[j]);
 	}
+
+#ifdef CONFIG_RISCV_ISA_V
+	if (elf_hwcap & COMPAT_HWCAP_ISA_V) {
+		static_branch_enable(&riscv_isa_ext_key_vector);
+	}
+#endif
 }
 
 #ifdef CONFIG_RISCV_ALTERNATIVE
