@@ -140,10 +140,10 @@ secondary_start_sbi:
 	.option pop
 
 	/*
-	 * Disable FPU to detect illegal usage of
-	 * floating point in kernel space
+	 * Disable extensions (FPU/Vector) to detect illegal usage of
+	 * floating point or vector in kernel space.
 	 */
-	li t0, SR_FS
+	li t0, SR_AXS
 	csrc CSR_STATUS, t0
 
 	/* Set trap vector to spin forever to help debug */
@@ -234,10 +234,10 @@ pmp_done:
 .option pop
 
 	/*
-	 * Disable FPU to detect illegal usage of
-	 * floating point in kernel space
+	 * Disable extensions (FPU/Vector) to detect illegal usage of
+	 * floating point or vector in kernel space.
 	 */
-	li t0, SR_FS
+	li t0, SR_AXS
 	csrc CSR_STATUS, t0
 
 #ifdef CONFIG_RISCV_BOOT_SPINWAIT
