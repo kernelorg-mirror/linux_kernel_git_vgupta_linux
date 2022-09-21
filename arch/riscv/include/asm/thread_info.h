@@ -79,6 +79,8 @@ struct thread_info {
 	.preempt_count	= INIT_PREEMPT_COUNT,	\
 }
 
+void arch_release_task_struct(struct task_struct *tsk);
+
 #endif /* !__ASSEMBLY__ */
 
 /*
