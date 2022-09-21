@@ -21,15 +21,16 @@
 #include <asm/csr.h>
 
 extern u32 __user_rt_sigreturn[2];
+static size_t rvv_sc_size;
 
 #define DEBUG_SIG 0
 
 struct rt_sigframe {
 	struct siginfo info;
-	struct ucontext uc;
 #ifndef CONFIG_MMU
 	u32 sigreturn_code[2];
 #endif
+	struct ucontext uc;
 };
 
 #ifdef CONFIG_FPU
@@ -86,16 +87,145 @@ static long save_fp_state(struct pt_regs *regs,
 #define restore_fp_state(task, regs) (0)
 #endif
 
-static long restore_sigcontext(struct pt_regs *regs,
-	struct sigcontext __user *sc)
+#ifdef CONFIG_RISCV_ISA_V
+
+static long save_v_state(struct pt_regs *regs, void **sc_vec)
+{
+	/*
+	 * Put __sc_riscv_v_state to the user's signal context space pointed
+	 * by sc_vec and the datap point the address right
+	 * after __sc_riscv_v_state.
+	 */
+	struct __sc_riscv_v_state __user *state = (struct __sc_riscv_v_state *) (*sc_vec);
+	void __user *datap = state + 1;
+	long err;
+
+	err = __put_user(RVV_MAGIC, &state->head.magic);
+	err = __put_user(rvv_sc_size, &state->head.size);
+
+	vstate_save(current, regs);
+	/* Copy additional vstate (except V regfile). */
+	err = __copy_to_user(&state->v_state, &current->thread.vstate,
+			     RISCV_V_STATE_DATAP);
+	if (unlikely(err))
+		return err;
+
+	/* Copy the pointer datap itself. */
+	err = __put_user(datap, &state->v_state.datap);
+	if (unlikely(err))
+		return err;
+
+	/* Copy the V regfile to user space datap. */
+	err = __copy_to_user(datap, current->thread.vstate.datap, riscv_vsize);
+
+	*sc_vec += rvv_sc_size;
+
+	return err;
+}
+
+static long restore_v_state(struct pt_regs *regs, void **sc_vec)
 {
 	long err;
+	struct __sc_riscv_v_state __user *state = (struct __sc_riscv_v_state *)(*sc_vec);
+	void __user *datap;
+
+	/* ctx_hdr check for RVV_MAGIC already done in caller. */
+
+	/* Copy everything of __sc_riscv_v_state except datap. */
+	err = __copy_from_user(&current->thread.vstate, &state->v_state,
+			       RISCV_V_STATE_DATAP);
+	if (unlikely(err))
+		return err;
+
+	/* Copy the pointer datap itself. */
+	err = __get_user(datap, &state->v_state.datap);
+	if (unlikely(err))
+		return err;
+
+	/* Copy the whole vector content from user space datap. */
+	err = __copy_from_user(current->thread.vstate.datap, datap, riscv_vsize);
+	if (unlikely(err))
+		return err;
+
+	vstate_restore(current, regs);
+
+	*sc_vec += rvv_sc_size;
+
+	return err;
+}
+
+#else
+#define save_v_state(task, regs) (0)
+#define restore_v_state(task, regs) (0)
+#endif
+
+static long restore_sigcontext(struct pt_regs *regs,
+			       struct sigcontext __user *sc)
+{
+	void *sc_extn = &sc->sc_extn[0];
+	long err;
+
 	/* sc_regs is structured the same as the start of pt_regs */
 	err = __copy_from_user(regs, &sc->sc_regs, sizeof(sc->sc_regs));
 	/* Restore the floating-point state. */
 	if (has_fpu())
 		err |= restore_fp_state(regs, &sc->sc_fpregs);
+
+	while (1 && !err) {
+		struct __riscv_ctx_hdr *head = (struct __riscv_ctx_hdr *)sc_extn;
+		__u32 magic, size;
+
+		err |= __get_user(magic, &head->magic);
+		err |= __get_user(size, &head->size);
+		if (err)
+			goto done;
+
+		switch (magic) {
+		case END_MAGIC:
+			if (size != END_HDR_SIZE)
+				goto invalid;
+			goto done;
+		case RVV_MAGIC:
+			if (!has_vector() || (size != rvv_sc_size))
+				goto invalid;
+			err |= restore_v_state(regs, &sc_extn);
+			break;
+		default:
+			goto invalid;
+		}
+	}
+done:
 	return err;
+
+invalid:
+	return -EINVAL;
+}
+
+static size_t cal_rt_frame_size(void)
+{
+	struct rt_sigframe __user *frame;
+	static size_t frame_size;
+	size_t total_context_size = 0;
+	size_t sc_extn_size = sizeof(frame->uc.uc_mcontext.sc_extn);
+
+	if (frame_size)
+		goto done;
+
+	frame_size = sizeof(*frame);
+
+	if (has_vector())
+		total_context_size += rvv_sc_size;
+
+	/* Add a __riscv_ctx_hdr for END signal context header. */
+	total_context_size += sizeof(struct __riscv_ctx_hdr);
+
+	if (total_context_size > sc_extn_size)
+		frame_size += (total_context_size - sc_extn_size);
+
+	frame_size = round_up(frame_size, 16);
+done:
+	return frame_size;
+
 }
 
 SYSCALL_DEFINE0(rt_sigreturn)
@@ -104,13 +234,14 @@ SYSCALL_DEFINE0(rt_sigreturn)
 	struct rt_sigframe __user *frame;
 	struct task_struct *task;
 	sigset_t set;
+	size_t frame_size = cal_rt_frame_size();
 
 	/* Always make any pending restarted system calls return -EINTR */
 	current->restart_block.fn = do_no_restart_syscall;
 
 	frame = (struct rt_sigframe __user *)regs->sp;
 
-	if (!access_ok(frame, sizeof(*frame)))
+	if (!access_ok(frame, frame_size))
 		goto badframe;
 
 	if (__copy_from_user(&set, &frame->uc.uc_sigmask, sizeof(set)))
@@ -141,15 +272,24 @@ badframe:
 }
 
 static long setup_sigcontext(struct rt_sigframe __user *frame,
-	struct pt_regs *regs)
+			     struct pt_regs *regs)
 {
 	struct sigcontext __user *sc = &frame->uc.uc_mcontext;
+	void *sc_extn = &sc->sc_extn[0];
 	long err;
+
 	/* sc_regs is structured the same as the start of pt_regs */
 	err = __copy_to_user(&sc->sc_regs, regs, sizeof(sc->sc_regs));
 	/* Save the floating-point state. */
 	if (has_fpu())
 		err |= save_fp_state(regs, &sc->sc_fpregs);
+	/* Save the vector state. */
+	if (has_vector())
+		err |= save_v_state(regs, &sc_extn);
+
+	/* Put END __riscv_ctx_hdr at the end. */
+	err = __put_user(END_MAGIC, &((struct __riscv_ctx_hdr *)sc_extn)->magic);
+	err = __put_user(END_HDR_SIZE, &((struct __riscv_ctx_hdr *)sc_extn)->size);
 	return err;
 }
 
@@ -180,10 +320,11 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame;
+	size_t frame_size = cal_rt_frame_size();
 	long err = 0;
 
-	frame = get_sigframe(ksig, regs, sizeof(*frame));
-	if (!access_ok(frame, sizeof(*frame)))
+	frame = get_sigframe(ksig, regs, frame_size);
+	if (!access_ok(frame, frame_size))
 		return -EFAULT;
 
 	err |= copy_siginfo_to_user(&frame->info, &ksig->info);
@@ -328,4 +469,9 @@ asmlinkage __visible void do_notify_resume(struct pt_regs *regs,
 
 	if (thread_info_flags & _TIF_NOTIFY_RESUME)
 		resume_user_mode_work(regs);
+}
+
+void __init init_rt_signal_env(void)
+{
+	rvv_sc_size = sizeof(struct __sc_riscv_v_state) + riscv_vsize;
 }

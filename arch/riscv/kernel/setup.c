@@ -299,6 +299,8 @@ void __init setup_arch(char **cmdline_p)
 	riscv_init_cbom_blocksize();
 	riscv_fill_hwcap();
 	apply_boot_alternatives();
+	/* needs to be after riscv_fill_hwcap */
+	init_rt_signal_env();
 }
 
 static int __init topology_init(void)
