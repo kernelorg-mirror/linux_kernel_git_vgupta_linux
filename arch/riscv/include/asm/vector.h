@@ -27,6 +27,10 @@
 #ifdef CONFIG_RISCV_ISA_V
 
 extern struct static_key_false riscv_isa_ext_key_vector;
+extern unsigned long riscv_vsize;
+
+extern void __vstate_save(struct __riscv_v_state *save_to, void *datap);
+extern void __vstate_restore(struct __riscv_v_state *restore_from, void *datap);
 
 static __always_inline bool has_vector(void)
 {
@@ -45,6 +49,7 @@ static inline void rvv_disable(void) {
 
 #else /* ! CONFIG_RISCV_ISA_V */
 
+#define riscv_vsize (0)
 static __always_inline bool has_vector(void) { return false; }
 
 #endif /* ! CONFIG_RISCV_ISA_V */

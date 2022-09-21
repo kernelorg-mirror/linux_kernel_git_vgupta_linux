@@ -35,7 +35,9 @@ DEFINE_STATIC_KEY_ARRAY_FALSE(riscv_isa_ext_keys, RISCV_ISA_EXT_KEY_MAX);
 EXPORT_SYMBOL(riscv_isa_ext_keys);
 #ifdef CONFIG_RISCV_ISA_V
 __ro_after_init DEFINE_STATIC_KEY_FALSE(riscv_isa_ext_key_vector);
+unsigned long riscv_vsize __read_mostly;
 EXPORT_SYMBOL_GPL(riscv_isa_ext_key_vector);
+EXPORT_SYMBOL_GPL(riscv_vsize);
 #endif
 
 /**
@@ -260,6 +262,10 @@ void __init riscv_fill_hwcap(void)
 #ifdef CONFIG_RISCV_ISA_V
 	if (elf_hwcap & COMPAT_HWCAP_ISA_V) {
 		static_branch_enable(&riscv_isa_ext_key_vector);
+		/* There are 32 vector registers with vlenb length. */
+		rvv_enable();
+		riscv_vsize = csr_read(CSR_VLENB) * 32;
+		rvv_disable();
 	}
 #endif
 }
